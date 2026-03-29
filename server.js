@@ -70,6 +70,30 @@ function requireAuth(req, res, next) {
     }
 }
 
+function requireManager(req, res, next) {
+    requireAuth(req, res, () => {
+        if (req.user.role === 'manager' || req.user.role === 'admin') {
+            return next();
+        }
+
+        return res.status(403).json({
+            error: 'Forbidden. Manager or admin access required.'
+        });
+    });
+}
+
+function requireAdmin(req, res, next) {
+    requireAuth(req, res, () => {
+        if (req.user.role === 'admin') {
+            return next();
+        }
+
+        return res.status(403).json({
+            error: 'Forbidden. Admin access required.'
+        });
+    });
+}
+
 // Test database connection
 async function testConnection() {
     try {
@@ -87,7 +111,7 @@ testConnection();
 // POST /api/register - Register new user
 app.post('/api/register', async (req, res) => {
     try {
-        const { name, email, password } = req.body;
+        const { name, email, password, role = 'employee' } = req.body;
         
         // Check if user exists
         const existingUser = await User.findOne({ where: { email } });
@@ -102,16 +126,29 @@ app.post('/api/register', async (req, res) => {
         const newUser = await User.create({
             name,
             email,
-            password: hashedPassword
-            // TODO: Add role field
+            password: hashedPassword,
+            role
+        });
+
+        const tokenPayload = {
+            id: newUser.id,
+            name: newUser.name,
+            email: newUser.email,
+            role: newUser.role
+        };
+
+        const token = jwt.sign(tokenPayload, JWT_SECRET, {
+            expiresIn: JWT_EXPIRES_IN
         });
         
         res.status(201).json({
             message: 'User registered successfully',
+            token,
             user: {
                 id: newUser.id,
                 name: newUser.name,
-                email: newUser.email
+                email: newUser.email,
+                role: newUser.role
             }
         });
         
@@ -190,7 +227,7 @@ app.get('/api/users/profile', requireAuth, async (req, res) => {
 });
 
 // GET /api/users - Get all users (TODO: Admin only)
-app.get('/api/users', requireAuth, async (req, res) => {
+app.get('/api/users', requireAdmin, async (req, res) => {
     try {
         const users = await User.findAll({
             attributes: ['id', 'name', 'email'] // Don't return passwords
@@ -260,7 +297,7 @@ app.get('/api/projects/:id', requireAuth, async (req, res) => {
 });
 
 // POST /api/projects - Create new project (TODO: Manager+ only)
-app.post('/api/projects', requireAuth, async (req, res) => {
+app.post('/api/projects', requireManager, async (req, res) => {
     try {
         const { name, description, status = 'active' } = req.body;
         
@@ -279,7 +316,7 @@ app.post('/api/projects', requireAuth, async (req, res) => {
 });
 
 // PUT /api/projects/:id - Update project (TODO: Manager+ only)
-app.put('/api/projects/:id', requireAuth, async (req, res) => {
+app.put('/api/projects/:id', requireManager, async (req, res) => {
     try {
         const { name, description, status } = req.body;
         
@@ -301,7 +338,7 @@ app.put('/api/projects/:id', requireAuth, async (req, res) => {
 });
 
 // DELETE /api/projects/:id - Delete project (TODO: Admin only)
-app.delete('/api/projects/:id', requireAuth, async (req, res) => {
+app.delete('/api/projects/:id', requireAdmin, async (req, res) => {
     try {
         const deletedRowsCount = await Project.destroy({
             where: { id: req.params.id }
@@ -342,7 +379,7 @@ app.get('/api/projects/:id/tasks', requireAuth, async (req, res) => {
 });
 
 // POST /api/projects/:id/tasks - Create task (TODO: Manager+ only)
-app.post('/api/projects/:id/tasks', requireAuth, async (req, res) => {
+app.post('/api/projects/:id/tasks', requireManager, async (req, res) => {
     try {
         const { title, description, assignedUserId, priority = 'medium' } = req.body;
         
@@ -385,7 +422,7 @@ app.put('/api/tasks/:id', requireAuth, async (req, res) => {
 });
 
 // DELETE /api/tasks/:id - Delete task (TODO: Manager+ only)
-app.delete('/api/tasks/:id', requireAuth, async (req, res) => {
+app.delete('/api/tasks/:id', requireManager, async (req, res) => {
     try {
         const deletedRowsCount = await Task.destroy({
             where: { id: req.params.id }
