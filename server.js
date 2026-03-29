@@ -1,5 +1,4 @@
 const express = require('express');
-const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { db, User, Project, Task } = require('./database/setup');
@@ -7,33 +6,66 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
 
 // Middleware
 app.use(express.json());
 
-// Session middleware (TODO: Replace with JWT)
-app.use(session({
-    secret: process.env.SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
-    cookie: { 
-        secure: false,
-        maxAge: 24 * 60 * 60 * 1000 // 24 hours
-    }
-}));
-
-// TODO: Create JWT middleware to replace session auth
 function requireAuth(req, res, next) {
-    if (req.session && req.session.userId) {
-        req.user = {
-            id: req.session.userId,
-            name: req.session.userName,
-            email: req.session.userEmail
-        };
+    if (!JWT_SECRET) {
+        return res.status(500).json({
+            error: 'Server authentication is not configured.'
+        });
+    }
+
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader) {
+        return res.status(401).json({
+            error: 'Authentication required. Missing Authorization header.'
+        });
+    }
+
+    if (!authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({
+            error: 'Authentication required. Use Bearer token format.'
+        });
+    }
+
+    const token = authHeader.split(' ')[1];
+    if (!token) {
+        return res.status(401).json({
+            error: 'Authentication required. Token is missing.'
+        });
+    }
+
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+
+        if (!decoded || !decoded.id) {
+            return res.status(401).json({
+                error: 'Invalid token payload.'
+            });
+        }
+
+        req.user = decoded;
         next();
-    } else {
-        res.status(401).json({ 
-            error: 'Authentication required. Please log in.' 
+    } catch (error) {
+        if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({
+                error: 'Token expired. Please log in again.'
+            });
+        }
+
+        if (error.name === 'JsonWebTokenError') {
+            return res.status(401).json({
+                error: 'Invalid token.'
+            });
+        }
+
+        return res.status(500).json({
+            error: 'Authentication processing failed.'
         });
     }
 }
@@ -89,7 +121,7 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// POST /api/login - User login (TODO: Replace with JWT)
+// POST /api/login - User login
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -103,18 +135,26 @@ app.post('/api/login', async (req, res) => {
         if (!isValidPassword) {
             return res.status(401).json({ error: 'Invalid email or password' });
         }
-        
-        // Create session (TODO: Replace with JWT)
-        req.session.userId = user.id;
-        req.session.userName = user.name;
-        req.session.userEmail = user.email;
+
+        const tokenPayload = {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            role: user.role
+        };
+
+        const token = jwt.sign(tokenPayload, JWT_SECRET, {
+            expiresIn: JWT_EXPIRES_IN
+        });
         
         res.json({
             message: 'Login successful',
+            token,
             user: {
                 id: user.id,
                 name: user.name,
-                email: user.email
+                email: user.email,
+                role: user.role
             }
         });
         
@@ -126,12 +166,7 @@ app.post('/api/login', async (req, res) => {
 
 // POST /api/logout - User logout
 app.post('/api/logout', (req, res) => {
-    req.session.destroy((err) => {
-        if (err) {
-            return res.status(500).json({ error: 'Failed to logout' });
-        }
-        res.json({ message: 'Logout successful' });
-    });
+    res.json({ message: 'Logout successful' });
 });
 
 // USER ROUTES
